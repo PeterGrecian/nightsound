@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NightSound</string>
+    <string name="notification_channel_name">Audio Recording</string>
+    <string name="notification_channel_description">Ongoing audio recording notification</string>
+    <string name="notification_title">NightSound Recording</string>
+    <string name="notification_text">Recording audio in the background</string>
+</resources>
