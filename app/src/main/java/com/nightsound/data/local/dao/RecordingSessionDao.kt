@@ -24,4 +24,7 @@ interface RecordingSessionDao {
 
     @Query("SELECT * FROM recording_sessions WHERE endTime IS NULL LIMIT 1")
     suspend fun getActiveSession(): RecordingSession?
+
+    @Query("DELETE FROM recording_sessions")
+    suspend fun deleteAll()
 }

@@ -9,16 +9,19 @@ import android.os.IBinder
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.nightsound.data.repository.SettingsRepository
 import com.nightsound.service.AudioRecordingService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
-    application: Application
+    application: Application,
+    private val settingsRepository: SettingsRepository
 ) : AndroidViewModel(application) {
 
     private val TAG = "MainViewModel"
@@ -35,6 +38,15 @@ class MainViewModel @Inject constructor(
 
     private val _snippetCount = MutableStateFlow(0)
     val snippetCount: StateFlow<Int> = _snippetCount
+
+    private val _maxSnippets = MutableStateFlow(3)
+    val maxSnippets: StateFlow<Int> = _maxSnippets
+
+    private val _currentSnippets = MutableStateFlow<List<Pair<Long, Double>>>(emptyList())
+    val currentSnippets: StateFlow<List<Pair<Long, Double>>> = _currentSnippets
+
+    private val _recordingStartTime = MutableStateFlow<Long?>(null)
+    val recordingStartTime: StateFlow<Long?> = _recordingStartTime
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -61,6 +73,18 @@ class MainViewModel @Inject constructor(
                     _snippetCount.value = count
                 }
             }
+
+            viewModelScope.launch {
+                recordingService?.currentSnippets?.collect {
+                    _currentSnippets.value = it
+                }
+            }
+
+            viewModelScope.launch {
+                recordingService?.recordingStartTime?.collect {
+                    _recordingStartTime.value = it
+                }
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -72,6 +96,9 @@ class MainViewModel @Inject constructor(
 
     init {
         bindService()
+        viewModelScope.launch {
+            settingsRepository.snippetCount.collectLatest { _maxSnippets.value = it }
+        }
     }
 
     private fun bindService() {

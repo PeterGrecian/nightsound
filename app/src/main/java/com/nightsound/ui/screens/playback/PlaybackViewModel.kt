@@ -6,11 +6,15 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nightsound.data.local.entities.AudioSnippet
+import com.nightsound.data.local.entities.RecordingSession
 import com.nightsound.data.repository.AudioRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -24,8 +28,20 @@ class PlaybackViewModel @Inject constructor(
     private val TAG = "PlaybackViewModel"
     private val context = application.applicationContext
 
-    private val _snippets = MutableStateFlow<List<AudioSnippet>>(emptyList())
-    val snippets: StateFlow<List<AudioSnippet>> = _snippets
+    private val _sortByLoudness = MutableStateFlow(false)
+    val sortByLoudness: StateFlow<Boolean> = _sortByLoudness
+
+    val snippets: StateFlow<List<AudioSnippet>> = combine(
+        audioRepository.getAllSnippets(),
+        _sortByLoudness
+    ) { snippets, byLoudness ->
+        if (byLoudness) snippets.sortedByDescending { it.rmsValue }
+        else snippets // already timestamp DESC from Room
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
+
+    val sessions: StateFlow<Map<Long, RecordingSession>> = audioRepository.getAllSessions()
+        .map { list -> list.associateBy { it.id } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyMap())
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying
@@ -34,19 +50,6 @@ class PlaybackViewModel @Inject constructor(
     val currentPlayingId: StateFlow<Long?> = _currentPlayingId
 
     private var mediaPlayer: MediaPlayer? = null
-
-    init {
-        loadSnippets()
-    }
-
-    private fun loadSnippets() {
-        viewModelScope.launch {
-            audioRepository.getAllSnippets().collectLatest { snippets ->
-                _snippets.value = snippets
-                Log.d(TAG, "Loaded ${snippets.size} snippets")
-            }
-        }
-    }
 
     fun playSnippet(snippet: AudioSnippet) {
         try {
@@ -98,21 +101,35 @@ class PlaybackViewModel @Inject constructor(
     fun deleteSnippet(snippet: AudioSnippet) {
         viewModelScope.launch {
             try {
-                // Delete file
                 val cacheDir = File(context.cacheDir, "audio_recordings")
                 val file = File(cacheDir, snippet.fileName)
                 if (file.exists()) {
                     file.delete()
                 }
-
-                // Delete from database
                 audioRepository.deleteSnippet(snippet)
                 Log.d(TAG, "Deleted snippet: ${snippet.fileName}")
-
             } catch (e: Exception) {
                 Log.e(TAG, "Error deleting snippet", e)
             }
         }
+    }
+
+    fun clearAllRecordings() {
+        stopPlayback()
+        viewModelScope.launch {
+            try {
+                val cacheDir = File(context.cacheDir, "audio_recordings")
+                cacheDir.listFiles()?.forEach { it.delete() }
+                audioRepository.clearAll()
+                Log.d(TAG, "Cleared all recordings")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error clearing recordings", e)
+            }
+        }
+    }
+
+    fun setSortByLoudness(byLoudness: Boolean) {
+        _sortByLoudness.value = byLoudness
     }
 
     override fun onCleared() {

@@ -25,10 +25,6 @@ class AudioRepository @Inject constructor(
         return database.audioSnippetDao().getSnippetById(id)
     }
 
-    suspend fun getUnuploadedSnippets(): List<AudioSnippet> {
-        return database.audioSnippetDao().getUnuploadedSnippets()
-    }
-
     suspend fun insertSnippet(snippet: AudioSnippet): Long {
         return database.audioSnippetDao().insert(snippet)
     }
@@ -60,5 +56,10 @@ class AudioRepository @Inject constructor(
 
     suspend fun updateSession(session: RecordingSession) {
         database.recordingSessionDao().update(session)
+    }
+
+    suspend fun clearAll() {
+        database.audioSnippetDao().deleteAll()
+        database.recordingSessionDao().deleteAll()
     }
 }

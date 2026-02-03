@@ -23,11 +23,8 @@ import com.nightsound.service.audio.AudioFileWriter
 import com.nightsound.service.audio.LoudnessAnalyzer
 import com.nightsound.service.audio.TopSnippetsManager
 import com.nightsound.data.repository.SettingsRepository
-import com.nightsound.data.workers.S3UploadWorker
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
-import androidx.work.workDataOf
 import dagger.hilt.android.AndroidEntryPoint
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,8 +49,6 @@ class AudioRecordingService : Service() {
     private val SAMPLE_RATE = 16000
     private val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
     private val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
-    private val RECORDING_DURATION_SECONDS = 10
-
     private var audioRecord: AudioRecord? = null
     private var recordingJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -63,9 +58,10 @@ class AudioRecordingService : Service() {
 
     // Audio processing components
     private val loudnessAnalyzer = LoudnessAnalyzer()
-    private val topSnippetsManager = TopSnippetsManager(maxSnippets = 10)
+    private var topSnippetsManager = TopSnippetsManager(maxSnippets = 3)
+    private var recordingDurationSeconds = 10
     private lateinit var audioFileWriter: AudioFileWriter
-    private lateinit var cacheDir: File
+    private lateinit var audioCacheDir: File
 
     // State flows for UI updates
     private val _isRecording = MutableStateFlow(false)
@@ -76,6 +72,12 @@ class AudioRecordingService : Service() {
 
     private val _snippetCount = MutableStateFlow(0)
     val snippetCount: StateFlow<Int> = _snippetCount
+
+    private val _currentSnippets = MutableStateFlow<List<Pair<Long, Double>>>(emptyList())
+    val currentSnippets: StateFlow<List<Pair<Long, Double>>> = _currentSnippets
+
+    private val _recordingStartTime = MutableStateFlow<Long?>(null)
+    val recordingStartTime: StateFlow<Long?> = _recordingStartTime
 
     inner class LocalBinder : Binder() {
         fun getService(): AudioRecordingService = this@AudioRecordingService
@@ -93,9 +95,9 @@ class AudioRecordingService : Service() {
         audioFileWriter = AudioFileWriter(SAMPLE_RATE, 1, 16)
 
         // Setup cache directory
-        cacheDir = File(cacheDir, "audio_recordings")
-        if (!cacheDir.exists()) {
-            cacheDir.mkdirs()
+        audioCacheDir = File(getCacheDir(), "audio_recordings")
+        if (!audioCacheDir.exists()) {
+            audioCacheDir.mkdirs()
         }
 
         // Acquire wake lock
@@ -132,31 +134,33 @@ class AudioRecordingService : Service() {
             wakeLock.acquire(12 * 60 * 60 * 1000L) // 12 hours max
         }
 
-        // Create recording session in database
-        scope.launch {
+        _isRecording.value = true
+
+        recordingJob = scope.launch {
+            // Read settings
+            recordingDurationSeconds = settingsRepository.chunkDurationSeconds.first()
+            topSnippetsManager = TopSnippetsManager(maxSnippets = settingsRepository.snippetCount.first())
+
+            // Create recording session in database
             val session = RecordingSession(
                 startTime = System.currentTimeMillis(),
                 endTime = null,
                 snippetCount = 0
             )
             currentSessionId = database.recordingSessionDao().insert(session)
+            _recordingStartTime.value = session.startTime
             Log.d(TAG, "Created recording session: $currentSessionId")
-        }
 
-        // Initialize AudioRecord
-        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE,
-            CHANNEL_CONFIG,
-            AUDIO_FORMAT,
-            bufferSize
-        )
+            // Initialize AudioRecord
+            val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE,
+                CHANNEL_CONFIG,
+                AUDIO_FORMAT,
+                bufferSize
+            )
 
-        _isRecording.value = true
-
-        // Start recording in coroutine
-        recordingJob = scope.launch {
             recordAudio()
         }
     }
@@ -168,11 +172,11 @@ class AudioRecordingService : Service() {
             audioRecord.startRecording()
             Log.d(TAG, "AudioRecord started")
 
-            val samplesPerChunk = SAMPLE_RATE * RECORDING_DURATION_SECONDS
+            val samplesPerChunk = SAMPLE_RATE * recordingDurationSeconds
             val buffer = ShortArray(samplesPerChunk)
             var chunkNumber = 0
 
-            while (_isRecording.value && isActive) {
+            while (_isRecording.value && coroutineContext.isActive) {
                 // Read 10 seconds of audio
                 var totalSamplesRead = 0
                 while (totalSamplesRead < samplesPerChunk && _isRecording.value) {
@@ -183,6 +187,11 @@ class AudioRecordingService : Service() {
                     )
 
                     if (samplesRead > 0) {
+                        // Update volume live on each read for UI feedback
+                        val rms = loudnessAnalyzer.calculateRMS(
+                            buffer.copyOfRange(totalSamplesRead, totalSamplesRead + samplesRead)
+                        )
+                        _currentVolume.value = rms
                         totalSamplesRead += samplesRead
                     } else {
                         Log.e(TAG, "Error reading audio: $samplesRead")
@@ -191,14 +200,13 @@ class AudioRecordingService : Service() {
                 }
 
                 if (totalSamplesRead == samplesPerChunk) {
-                    // Calculate RMS loudness
+                    // Calculate RMS loudness for the full chunk (used for snippet ranking)
                     val rms = loudnessAnalyzer.calculateRMS(buffer)
-                    _currentVolume.value = rms
 
                     // Save to file
                     val timestamp = System.currentTimeMillis()
                     val fileName = "audio_${currentSessionId}_${chunkNumber}_${timestamp}.wav"
-                    val file = File(cacheDir, fileName)
+                    val file = File(audioCacheDir, fileName)
 
                     try {
                         audioFileWriter.writeWavFile(file, buffer)
@@ -208,6 +216,8 @@ class AudioRecordingService : Service() {
 
                         if (accepted) {
                             _snippetCount.value = topSnippetsManager.getCount()
+                            _currentSnippets.value = topSnippetsManager.getTopSnippets()
+                                .map { Pair(it.timestamp, it.rmsValue) }
                         }
 
                         Log.d(TAG, "Chunk $chunkNumber: RMS=$rms, accepted=$accepted")
@@ -236,6 +246,8 @@ class AudioRecordingService : Service() {
 
         Log.d(TAG, "Stopping recording")
         _isRecording.value = false
+        _currentSnippets.value = emptyList()
+        _recordingStartTime.value = null
 
         // Cancel recording job
         recordingJob?.cancel()
@@ -251,14 +263,11 @@ class AudioRecordingService : Service() {
             val topSnippets = topSnippetsManager.finalizeTopSnippets()
             Log.d(TAG, "Finalized ${topSnippets.size} top snippets")
 
-            // Save to database
             val snippetEntities = topSnippets.map { snippetData ->
                 AudioSnippet(
                     fileName = snippetData.file.name,
                     timestamp = snippetData.timestamp,
                     rmsValue = snippetData.rmsValue,
-                    uploadedToS3 = false,
-                    s3Key = null,
                     sessionId = currentSessionId
                 )
             }
@@ -278,52 +287,9 @@ class AudioRecordingService : Service() {
 
             Log.d(TAG, "Saved ${snippetEntities.size} snippets to database")
 
-            // Enqueue S3 upload workers
-            enqueueS3Uploads()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
-
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-    }
-
-    private suspend fun enqueueS3Uploads() {
-        try {
-            val bucketName = settingsRepository.s3BucketName.first()
-            val region = settingsRepository.s3Region.first()
-
-            if (bucketName.isEmpty()) {
-                Log.w(TAG, "S3 bucket name not configured, skipping uploads")
-                return
-            }
-
-            // Get unuploaded snippets
-            val unuploadedSnippets = database.audioSnippetDao().getUnuploadedSnippets()
-
-            // Enqueue upload work for each snippet
-            val workManager = WorkManager.getInstance(applicationContext)
-            unuploadedSnippets.forEach { snippet ->
-                val uploadWork = OneTimeWorkRequestBuilder<S3UploadWorker>()
-                    .setInputData(
-                        workDataOf(
-                            S3UploadWorker.KEY_SNIPPET_ID to snippet.id,
-                            S3UploadWorker.KEY_BUCKET_NAME to bucketName,
-                            S3UploadWorker.KEY_REGION to region
-                        )
-                    )
-                    .build()
-
-                workManager.enqueue(uploadWork)
-                Log.d(TAG, "Enqueued S3 upload for snippet: ${snippet.id}")
-            }
-
-            Log.d(TAG, "Enqueued ${unuploadedSnippets.size} S3 upload workers")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error enqueueing S3 uploads", e)
-        }
-
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
     private fun createNotificationChannel() {

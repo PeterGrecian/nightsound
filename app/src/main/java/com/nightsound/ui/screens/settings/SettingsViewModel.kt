@@ -15,29 +15,11 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
-    private val _nightStartHour = MutableStateFlow(22)
-    val nightStartHour: StateFlow<Int> = _nightStartHour
+    private val _snippetCount = MutableStateFlow(3)
+    val snippetCount: StateFlow<Int> = _snippetCount
 
-    private val _nightStartMinute = MutableStateFlow(0)
-    val nightStartMinute: StateFlow<Int> = _nightStartMinute
-
-    private val _nightEndHour = MutableStateFlow(7)
-    val nightEndHour: StateFlow<Int> = _nightEndHour
-
-    private val _nightEndMinute = MutableStateFlow(0)
-    val nightEndMinute: StateFlow<Int> = _nightEndMinute
-
-    private val _s3BucketName = MutableStateFlow("")
-    val s3BucketName: StateFlow<String> = _s3BucketName
-
-    private val _s3Region = MutableStateFlow("us-east-1")
-    val s3Region: StateFlow<String> = _s3Region
-
-    private val _awsAccessKey = MutableStateFlow("")
-    val awsAccessKey: StateFlow<String> = _awsAccessKey
-
-    private val _awsSecretKey = MutableStateFlow("")
-    val awsSecretKey: StateFlow<String> = _awsSecretKey
+    private val _chunkDurationSeconds = MutableStateFlow(10)
+    val chunkDurationSeconds: StateFlow<Int> = _chunkDurationSeconds
 
     init {
         loadSettings()
@@ -45,58 +27,22 @@ class SettingsViewModel @Inject constructor(
 
     private fun loadSettings() {
         viewModelScope.launch {
-            settingsRepository.nightStartHour.collectLatest { _nightStartHour.value = it }
+            settingsRepository.snippetCount.collectLatest { _snippetCount.value = it }
         }
         viewModelScope.launch {
-            settingsRepository.nightStartMinute.collectLatest { _nightStartMinute.value = it }
-        }
-        viewModelScope.launch {
-            settingsRepository.nightEndHour.collectLatest { _nightEndHour.value = it }
-        }
-        viewModelScope.launch {
-            settingsRepository.nightEndMinute.collectLatest { _nightEndMinute.value = it }
-        }
-        viewModelScope.launch {
-            settingsRepository.s3BucketName.collectLatest { _s3BucketName.value = it }
-        }
-        viewModelScope.launch {
-            settingsRepository.s3Region.collectLatest { _s3Region.value = it }
-        }
-        viewModelScope.launch {
-            settingsRepository.awsAccessKey.collectLatest { _awsAccessKey.value = it }
-        }
-        viewModelScope.launch {
-            settingsRepository.awsSecretKey.collectLatest { _awsSecretKey.value = it }
+            settingsRepository.chunkDurationSeconds.collectLatest { _chunkDurationSeconds.value = it }
         }
     }
 
-    fun setNightStartTime(hour: Int, minute: Int) {
+    fun setSnippetCount(count: Int) {
         viewModelScope.launch {
-            settingsRepository.setNightStartTime(hour, minute)
+            settingsRepository.setSnippetCount(count)
         }
     }
 
-    fun setNightEndTime(hour: Int, minute: Int) {
+    fun setChunkDurationSeconds(seconds: Int) {
         viewModelScope.launch {
-            settingsRepository.setNightEndTime(hour, minute)
-        }
-    }
-
-    fun setS3BucketName(bucketName: String) {
-        viewModelScope.launch {
-            settingsRepository.setS3BucketName(bucketName)
-        }
-    }
-
-    fun setS3Region(region: String) {
-        viewModelScope.launch {
-            settingsRepository.setS3Region(region)
-        }
-    }
-
-    fun setAwsCredentials(accessKey: String, secretKey: String) {
-        viewModelScope.launch {
-            settingsRepository.setAwsCredentials(accessKey, secretKey)
+            settingsRepository.setChunkDurationSeconds(seconds)
         }
     }
 }

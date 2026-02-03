@@ -9,7 +9,7 @@ import com.nightsound.data.local.entities.RecordingSession
 
 @Database(
     entities = [AudioSnippet::class, RecordingSession::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class NightSoundDatabase : RoomDatabase() {

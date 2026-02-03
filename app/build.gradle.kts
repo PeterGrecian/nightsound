@@ -79,20 +79,12 @@ dependencies {
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
 
-    // WorkManager
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
-
     // Hilt Dependency Injection
     val hiltVersion = "2.48"
     implementation("com.google.dagger:hilt-android:$hiltVersion")
     ksp("com.google.dagger:hilt-compiler:$hiltVersion")
     implementation("androidx.hilt:hilt-navigation-compose:1.1.0")
-    implementation("androidx.hilt:hilt-work:1.1.0")
     ksp("androidx.hilt:hilt-compiler:1.1.0")
-
-    // AWS SDK for S3
-    implementation("aws.sdk.kotlin:s3:1.0.30")
-    implementation("aws.sdk.kotlin:aws-core:1.0.30")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
