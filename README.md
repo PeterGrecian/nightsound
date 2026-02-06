@@ -1,6 +1,6 @@
 # NightSound Android App
 
-An Android app that records audio overnight, detects the 10 loudest 10-second snippets, and uploads them to S3.
+An Android app that records audio overnight, detects the loudest audio snippets, and saves them for review. Supports configurable snippet count and duration, periodic saving, scheduled auto-stop, and delayed start.
 
 ## Architecture
 
@@ -14,13 +14,15 @@ An Android app that records audio overnight, detects the 10 loudest 10-second sn
 ## Features
 
 - Records audio continuously in the background using a foreground service
-- Calculates RMS (Root Mean Square) loudness for each 10-second audio chunk
-- Maintains top 10 loudest snippets using a priority queue (min heap)
-- Automatically deletes non-top-10 files to save storage
-- Uploads recordings to AWS S3 after recording completes
-- Real-time volume visualizer
+- Calculates RMS (Root Mean Square) loudness for each audio chunk
+- Maintains top N loudest snippets using a priority queue (min heap)
+- Automatically deletes non-top-N files to save storage
+- Real-time volume visualizer with bar chart
 - Playback interface for saved recordings
-- Configurable settings (night time, S3 credentials)
+- **Configurable snippet count** (1-20) and **chunk duration** (5-60s)
+- **Periodic save** — automatically save the N loudest snippets every X minutes, clearing the list so fresh candidates can accumulate
+- **Auto-stop** — stop recording at a set time of day (e.g. 6:00 AM)
+- **Delayed start** — wait N minutes after pressing Start before recording begins, with a live countdown on screen
 
 ## Project Structure
 
@@ -127,32 +129,44 @@ app/src/main/java/com/nightsound/
 1. **Start Recording**
    - Open the app
    - Tap "Start Recording" button
-   - A foreground notification appears
-   - The app records audio in 10-second chunks
+   - If **Delayed Start** is enabled, a countdown appears on screen — tap "Cancel" to abort
+   - Once recording begins, a foreground notification appears
+   - Audio is recorded in chunks of the configured duration
 
 2. **Monitor Progress**
-   - Real-time volume visualizer shows current audio level
-   - Snippet counter shows how many of the top 10 slots are filled
+   - Real-time volume bar chart shows current audio level
+   - Snippet counter shows how many of the top N slots are filled
+   - Live list of current top snippets with timestamps and loudness
 
 3. **Stop Recording**
-   - Tap "Stop Recording" button
-   - The service finalizes the top 10 snippets
-   - Non-top-10 files are automatically deleted
-   - S3 upload workers are enqueued
+   - Tap "Stop Recording" button, or let **Auto-Stop** end it at the configured time
+   - The service finalises the remaining top snippets and saves them to the database
+   - Non-top-N files are automatically deleted
 
 ### Playback
 
 1. Navigate to Recordings screen (list icon)
 2. View all saved snippets sorted by loudness
 3. Tap play button to listen to a snippet
-4. View upload status for each snippet
-5. Delete unwanted recordings
+4. Delete unwanted recordings
 
 ### Settings
 
-- Configure night start/end times (display only in current implementation)
-- Set S3 bucket and region
-- Enter AWS credentials
+Navigate to Settings (gear icon) to configure:
+
+**Recording**
+- **Top Snippets** (1-20, default 3) — how many loudest chunks to keep in memory
+- **Snippet Length** (5-60s, default 10s) — duration of each audio chunk
+
+**Periodic Save** (toggle, off by default)
+- **Save count** (1-10, default 2) — how many of the loudest snippets to save each interval
+- **Interval** (15-180 min, default 60) — how often to flush the loudest snippets to the database and clear the in-memory list so recording continues accumulating new candidates
+
+**Auto-Stop Recording** (toggle, off by default)
+- **Stop time** (hour + minute, default 6:00 AM) — recording stops automatically at this time of day. If the time has already passed today, it schedules for the next day.
+
+**Delayed Start** (toggle, off by default)
+- **Delay** (5-120 min, default 30) — after pressing Start, a countdown runs on the main screen before recording actually begins. Useful for placing the phone down and falling asleep first.
 
 ## Technical Details
 
@@ -160,7 +174,7 @@ app/src/main/java/com/nightsound/
 
 - **Sample Rate**: 16kHz (optimized for voice/snoring)
 - **Format**: PCM 16-bit mono
-- **Chunk Duration**: 10 seconds
+- **Chunk Duration**: Configurable 5-60 seconds (default 10)
 - **File Format**: WAV with 44-byte header
 - **Storage**: ~320 KB per 10-second chunk
 
@@ -171,13 +185,14 @@ Uses RMS (Root Mean Square) calculation:
 RMS = sqrt(sum(sample²) / n)
 ```
 
-### Top 10 Snippets Algorithm
+### Top N Snippets Algorithm
 
 - **Data Structure**: Min heap (PriorityQueue)
-- **Size**: 10 snippets maximum
+- **Size**: Configurable 1-20 snippets (default 3)
 - **Ordering**: By RMS value (ascending)
 - **Efficiency**: O(log n) insert, O(1) peek minimum
-- **Storage Optimization**: Immediately deletes files not in top 10
+- **Storage Optimization**: Immediately deletes files not in top N
+- **Periodic Save**: Optionally extracts and persists the loudest snippets at a regular interval, then clears them from the heap so new candidates can compete
 
 ### Battery Optimization
 
@@ -223,15 +238,12 @@ Key test areas:
 
 ## Known Limitations
 
-1. **Time pickers**: Settings screen shows times but doesn't have interactive pickers yet
-2. **Launcher icons**: Placeholder icons need to be replaced with proper assets
-3. **AWS credentials**: Stored in DataStore (use Cognito in production)
-4. **No scheduled recording**: Manual start/stop required
-5. **No audio visualization**: Volume visualizer is basic circle animation
+1. **Launcher icons**: Placeholder icons need to be replaced with proper assets
+2. **Auto-stop precision**: Uses coroutine delay, so the stop time may drift by a few seconds
+3. **Delayed start keeps screen on**: The countdown runs in the ViewModel; the phone can be locked but the countdown continues in memory
 
 ## Future Enhancements
 
-- Scheduled recording based on night start/end times
 - Advanced audio visualization (waveform, spectrogram)
 - Export recordings to local storage
 - Share recordings via email/messaging apps

@@ -1,7 +1,7 @@
 # NightSound Implementation Summary
 
 ## Overview
-Successfully implemented a complete Android app that records audio overnight, detects the 10 loudest 10-second snippets, and uploads them to AWS S3.
+A complete Android app that records audio overnight, detects the loudest audio snippets, and saves them for review. Supports periodic saving, auto-stop, and delayed start.
 
 ## Implementation Status: ✅ COMPLETE
 
@@ -19,12 +19,12 @@ All components from the implementation plan have been built and integrated.
 - ✅ `NightSoundDatabase.kt` - Room database configuration
 - ✅ `AudioRepository.kt` - Repository pattern for audio data
 - ✅ `S3Repository.kt` - S3 upload operations
-- ✅ `SettingsRepository.kt` - Settings persistence with DataStore
+- ✅ `SettingsRepository.kt` - Settings persistence with DataStore (snippet count, chunk duration, periodic save, auto-stop, delayed start)
 
 #### 2. Audio Recording Core (5 files)
 - ✅ `AudioRecordingService.kt` - Foreground service with wake lock
 - ✅ `LoudnessAnalyzer.kt` - RMS calculation algorithm
-- ✅ `TopSnippetsManager.kt` - Priority queue (min heap) for top 10
+- ✅ `TopSnippetsManager.kt` - Priority queue (min heap) for top N, with extractTopN for periodic save
 - ✅ `AudioFileWriter.kt` - WAV file writer with proper headers
 - ✅ `AudioSnippetData.kt` - Data class for snippet metadata
 
@@ -86,11 +86,14 @@ All components from the implementation plan have been built and integrated.
 - ✅ Foreground service with notification
 - ✅ Partial wake lock for overnight operation
 - ✅ 16kHz sample rate, mono, PCM 16-bit
-- ✅ 10-second chunk recording
+- ✅ Configurable chunk duration (5-60s, default 10)
 - ✅ Real-time RMS loudness calculation
-- ✅ Top 10 snippets tracking with min heap
-- ✅ Automatic deletion of non-top-10 files
+- ✅ Top N snippets tracking with min heap (configurable 1-20, default 3)
+- ✅ Automatic deletion of non-top-N files
 - ✅ WAV file format with proper headers
+- ✅ **Periodic save** — flush loudest snippets to DB every X minutes and clear heap
+- ✅ **Auto-stop** — stop recording at a configured time of day
+- ✅ **Delayed start** — countdown timer before recording begins
 
 ### Data Persistence
 - ✅ Room database with two entities
@@ -132,9 +135,10 @@ All components from the implementation plan have been built and integrated.
    RMS = sqrt(sum(sample²) / n)
    ```
 
-2. **Top 10 Tracking**: Min heap with O(log 10) = O(1) constant time
-   - Efficient memory: Only keeps 10 files
+2. **Top N Tracking**: Min heap with O(log N) time
+   - Efficient memory: Only keeps N files (configurable)
    - Real-time decisions: Immediate file deletion
+   - Periodic extraction: `extractTopN()` pulls loudest and removes from heap
 
 3. **WAV File Format**: Proper 44-byte header generation
    - RIFF chunk
@@ -180,8 +184,6 @@ All components from the implementation plan have been built and integrated.
 5. Configure S3 credentials in settings
 
 ### Future Enhancements
-- Interactive time pickers for night schedule
-- Scheduled recording (AlarmManager)
 - Advanced audio visualization (waveform)
 - Export to local storage
 - Share via email/messaging
@@ -191,10 +193,8 @@ All components from the implementation plan have been built and integrated.
 ## Known Limitations
 
 1. **Launcher icons**: Placeholder PNGs need replacement
-2. **Time pickers**: Display only, not interactive
-3. **Scheduled recording**: Not implemented (manual start/stop)
-4. **AWS credentials**: Stored in DataStore (use Cognito for production)
-5. **Gradle wrapper**: Placeholder script (download from Android Studio)
+2. **Auto-stop precision**: Coroutine-based delay may drift by a few seconds
+3. **Gradle wrapper**: Placeholder script (download from Android Studio)
 
 ## Dependencies Summary
 
@@ -225,8 +225,10 @@ All components from the implementation plan have been built and integrated.
 ## Success Criteria Met
 
 ✅ Records audio continuously overnight without crashes (foreground service + wake lock)
-✅ Correctly identifies and saves exactly 10 loudest snippets (min heap algorithm)
-✅ Uploads all snippets to S3 successfully (WorkManager with retry)
+✅ Correctly identifies and saves the loudest snippets (configurable min heap)
+✅ Periodic save flushes loudest snippets to DB at regular intervals
+✅ Auto-stop ends recording at a configured time of day
+✅ Delayed start provides a countdown before recording begins
 ✅ UI displays real-time volume during recording (StateFlow updates)
 ✅ Playback works for all saved snippets (MediaPlayer integration)
 ✅ Settings persist across app restarts (DataStore)
@@ -237,8 +239,8 @@ All components from the implementation plan have been built and integrated.
 The NightSound Android app has been fully implemented according to the plan. All core components are in place:
 - Audio recording with foreground service
 - RMS-based loudness detection
-- Top 10 snippets management with min heap
-- S3 upload with WorkManager
+- Top N snippets management with min heap
+- Periodic save, auto-stop, and delayed start
 - Complete UI with Compose
 - Proper architecture with MVVM and Clean Architecture
 
