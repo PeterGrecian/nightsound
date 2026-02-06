@@ -12,9 +12,12 @@ import androidx.lifecycle.viewModelScope
 import com.nightsound.data.repository.SettingsRepository
 import com.nightsound.service.AudioRecordingService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -47,6 +50,11 @@ class MainViewModel @Inject constructor(
 
     private val _recordingStartTime = MutableStateFlow<Long?>(null)
     val recordingStartTime: StateFlow<Long?> = _recordingStartTime
+
+    // Delayed start state
+    private val _delayedStartCountdownSeconds = MutableStateFlow<Int?>(null)
+    val delayedStartCountdownSeconds: StateFlow<Int?> = _delayedStartCountdownSeconds
+    private var delayedStartJob: Job? = null
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -107,6 +115,33 @@ class MainViewModel @Inject constructor(
     }
 
     fun startRecording() {
+        viewModelScope.launch {
+            val delayedStartEnabled = settingsRepository.delayedStartEnabled.first()
+            if (delayedStartEnabled) {
+                val delayMinutes = settingsRepository.delayedStartMinutes.first()
+                Log.d(TAG, "Delayed start: waiting $delayMinutes minutes")
+                startDelayedRecording(delayMinutes)
+            } else {
+                startRecordingNow()
+            }
+        }
+    }
+
+    private fun startDelayedRecording(delayMinutes: Int) {
+        delayedStartJob = viewModelScope.launch {
+            var remainingSeconds = delayMinutes * 60
+            _delayedStartCountdownSeconds.value = remainingSeconds
+            while (remainingSeconds > 0) {
+                delay(1000)
+                remainingSeconds--
+                _delayedStartCountdownSeconds.value = remainingSeconds
+            }
+            _delayedStartCountdownSeconds.value = null
+            startRecordingNow()
+        }
+    }
+
+    private fun startRecordingNow() {
         Log.d(TAG, "Starting recording")
         val intent = Intent(context, AudioRecordingService::class.java).apply {
             action = AudioRecordingService.ACTION_START_RECORDING
@@ -114,8 +149,17 @@ class MainViewModel @Inject constructor(
         context.startForegroundService(intent)
     }
 
+    fun cancelDelayedStart() {
+        delayedStartJob?.cancel()
+        delayedStartJob = null
+        _delayedStartCountdownSeconds.value = null
+        Log.d(TAG, "Delayed start cancelled")
+    }
+
     fun stopRecording() {
         Log.d(TAG, "Stopping recording")
+        // Cancel any pending delayed start
+        cancelDelayedStart()
         val intent = Intent(context, AudioRecordingService::class.java).apply {
             action = AudioRecordingService.ACTION_STOP_RECORDING
         }

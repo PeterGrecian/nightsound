@@ -71,6 +71,20 @@ class TopSnippetsManager(private val maxSnippets: Int = 10) {
     fun getCount(): Int = topSnippets.size
 
     /**
+     * Extract the top N loudest snippets and remove them from the heap.
+     * Used by periodic save to flush the loudest snippets to the database
+     * while continuing to record.
+     */
+    @Synchronized
+    fun extractTopN(n: Int): List<AudioSnippetData> {
+        val sorted = topSnippets.sortedByDescending { it.rmsValue }
+        val toExtract = sorted.take(n)
+        toExtract.forEach { topSnippets.remove(it) }
+        Log.d(TAG, "Extracted ${toExtract.size} top snippets, ${topSnippets.size} remaining")
+        return toExtract
+    }
+
+    /**
      * Clear all snippets and delete remaining files if cleanup is requested.
      */
     @Synchronized

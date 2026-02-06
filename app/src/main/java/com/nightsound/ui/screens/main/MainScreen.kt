@@ -45,6 +45,7 @@ fun MainScreen(
     val maxSnippets by viewModel.maxSnippets.collectAsStateWithLifecycle()
     val currentSnippets by viewModel.currentSnippets.collectAsStateWithLifecycle()
     val recordingStartTime by viewModel.recordingStartTime.collectAsStateWithLifecycle()
+    val delayedStartCountdown by viewModel.delayedStartCountdownSeconds.collectAsStateWithLifecycle()
 
     var showInfoDialog by remember { mutableStateOf(false) }
 
@@ -112,11 +113,19 @@ fun MainScreen(
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Status — red when recording, mauve when idle
+            // Status — red when recording, tertiary during countdown, default when idle
             Text(
-                text = if (isRecording) "Recording..." else "Ready",
+                text = when {
+                    delayedStartCountdown != null -> "Starting in ${formatElapsed(delayedStartCountdown!! * 1000L)}"
+                    isRecording -> "Recording..."
+                    else -> "Ready"
+                },
                 style = MaterialTheme.typography.headlineMedium,
-                color = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                color = when {
+                    delayedStartCountdown != null -> MaterialTheme.colorScheme.tertiary
+                    isRecording -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
             )
 
             // Snippet count — only while filling up (hide once heap is full)
@@ -159,7 +168,9 @@ fun MainScreen(
             // Start/Stop button
             Button(
                 onClick = {
-                    if (!hasRecordPermission) {
+                    if (delayedStartCountdown != null) {
+                        viewModel.cancelDelayedStart()
+                    } else if (!hasRecordPermission) {
                         recordPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     } else if (!hasNotificationPermission) {
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -175,11 +186,19 @@ fun MainScreen(
                     .fillMaxWidth()
                     .height(56.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    containerColor = when {
+                        delayedStartCountdown != null -> MaterialTheme.colorScheme.tertiary
+                        isRecording -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.primary
+                    }
                 )
             ) {
                 Text(
-                    text = if (isRecording) "Stop Recording" else "Start Recording",
+                    text = when {
+                        delayedStartCountdown != null -> "Cancel"
+                        isRecording -> "Stop Recording"
+                        else -> "Start Recording"
+                    },
                     style = MaterialTheme.typography.titleMedium
                 )
             }

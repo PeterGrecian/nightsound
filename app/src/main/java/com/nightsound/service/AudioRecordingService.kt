@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import java.io.File
+import java.util.Calendar
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -51,6 +52,8 @@ class AudioRecordingService : Service() {
     private val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
     private var audioRecord: AudioRecord? = null
     private var recordingJob: Job? = null
+    private var periodicSaveJob: Job? = null
+    private var autoStopJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private lateinit var wakeLock: PowerManager.WakeLock
@@ -151,6 +154,22 @@ class AudioRecordingService : Service() {
             _recordingStartTime.value = session.startTime
             Log.d(TAG, "Created recording session: $currentSessionId")
 
+            // Start periodic save if enabled
+            val periodicSaveEnabled = settingsRepository.periodicSaveEnabled.first()
+            if (periodicSaveEnabled) {
+                val saveCount = settingsRepository.periodicSaveCount.first()
+                val intervalMinutes = settingsRepository.periodicSaveIntervalMinutes.first()
+                startPeriodicSave(saveCount, intervalMinutes)
+            }
+
+            // Start auto-stop if enabled
+            val autoStopEnabled = settingsRepository.autoStopEnabled.first()
+            if (autoStopEnabled) {
+                val stopHour = settingsRepository.autoStopHour.first()
+                val stopMinute = settingsRepository.autoStopMinute.first()
+                startAutoStop(stopHour, stopMinute)
+            }
+
             // Initialize AudioRecord
             val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
             audioRecord = AudioRecord(
@@ -238,6 +257,62 @@ class AudioRecordingService : Service() {
         }
     }
 
+    private fun startPeriodicSave(saveCount: Int, intervalMinutes: Int) {
+        periodicSaveJob = scope.launch {
+            val intervalMs = intervalMinutes * 60 * 1000L
+            while (_isRecording.value && isActive) {
+                delay(intervalMs)
+                if (!_isRecording.value) break
+
+                val extracted = topSnippetsManager.extractTopN(saveCount)
+                if (extracted.isNotEmpty()) {
+                    val snippetEntities = extracted.map { snippetData ->
+                        AudioSnippet(
+                            fileName = snippetData.file.name,
+                            timestamp = snippetData.timestamp,
+                            rmsValue = snippetData.rmsValue,
+                            sessionId = currentSessionId
+                        )
+                    }
+                    database.audioSnippetDao().insertAll(snippetEntities)
+                    Log.d(TAG, "Periodic save: saved ${extracted.size} snippets to database")
+
+                    // Update UI state
+                    _snippetCount.value = topSnippetsManager.getCount()
+                    _currentSnippets.value = topSnippetsManager.getTopSnippets()
+                        .map { Pair(it.timestamp, it.rmsValue) }
+                }
+            }
+        }
+    }
+
+    private fun startAutoStop(stopHour: Int, stopMinute: Int) {
+        autoStopJob = scope.launch {
+            // Calculate delay until the target time
+            val now = Calendar.getInstance()
+            val target = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, stopHour)
+                set(Calendar.MINUTE, stopMinute)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                // If target time has already passed today, schedule for tomorrow
+                if (before(now)) {
+                    add(Calendar.DAY_OF_MONTH, 1)
+                }
+            }
+            val delayMs = target.timeInMillis - now.timeInMillis
+            Log.d(TAG, "Auto-stop scheduled in ${delayMs / 1000 / 60} minutes")
+
+            delay(delayMs)
+            if (_isRecording.value) {
+                Log.d(TAG, "Auto-stop triggered at $stopHour:${String.format("%02d", stopMinute)}")
+                withContext(Dispatchers.Main) {
+                    stopRecording()
+                }
+            }
+        }
+    }
+
     private fun stopRecording() {
         if (!_isRecording.value) {
             Log.w(TAG, "Not recording")
@@ -249,9 +324,13 @@ class AudioRecordingService : Service() {
         _currentSnippets.value = emptyList()
         _recordingStartTime.value = null
 
-        // Cancel recording job
+        // Cancel recording and timer jobs
         recordingJob?.cancel()
         recordingJob = null
+        periodicSaveJob?.cancel()
+        periodicSaveJob = null
+        autoStopJob?.cancel()
+        autoStopJob = null
 
         // Release wake lock
         if (wakeLock.isHeld) {
